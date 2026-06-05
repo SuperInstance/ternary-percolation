@@ -1,74 +1,302 @@
 #![forbid(unsafe_code)]
 
-pub struct UnionFind { parent: Vec<usize>, rank: Vec<usize>, size: Vec<usize> }
-impl UnionFind {
-    pub fn new(n: usize) -> Self { Self { parent: (0..n).collect(), rank: vec![0;n], size: vec![1;n] } }
-    pub fn find(&mut self, x: usize) -> usize { 
-        let p = self.parent[x];
-        if p != x { let r = self.find(p); self.parent[x] = r; r } else { x }
+/// Percolation on ternary grids. Values are -1, 0, or +1.
+/// Grid is stored row-major: index = row * width + col.
+
+/// Fill a grid with random ternary values.
+/// density controls probability of non-zero; non-zero values are ±1 with equal chance.
+pub fn fill_grid(width: usize, height: usize, density: f64, rng: &mut impl FnMut() -> f64) -> Vec<i8> {
+    let mut grid = vec![0i8; width * height];
+    for cell in grid.iter_mut() {
+        if rng() < density {
+            *cell = if rng() < 0.5 { -1 } else { 1 };
+        }
     }
-    pub fn union(&mut self, a: usize, b: usize) -> bool {
-        let ra = self.find(a); let rb = self.find(b);
-        if ra == rb { return false; }
-        let rank_a = self.rank[ra]; let rank_b = self.rank[rb];
-        if rank_a < rank_b { self.parent[ra] = rb; self.size[rb] += self.size[ra]; }
-        else if rank_a > rank_b { self.parent[rb] = ra; self.size[ra] += self.size[rb]; }
-        else { self.parent[rb] = ra; self.size[ra] += self.size[rb]; self.rank[ra] += 1; }
-        true
-    }
-    pub fn component_size(&mut self, x: usize) -> usize { let r = self.find(x); self.size[r] }
+    grid
 }
 
-pub struct TernaryLattice { pub n: usize, pub edges: Vec<(usize, usize, i8)>, pub signs: Vec<i8> }
-impl TernaryLattice {
-    pub fn new(n: usize) -> Self { Self { n, edges: Vec::new(), signs: vec![0; n] } }
-    pub fn add_edge(&mut self, from: usize, to: usize, sign: i8) { self.edges.push((from, to, sign)); }
-    pub fn percolates(&self) -> bool {
-        let mut uf = UnionFind::new(self.n);
-        for &(a, b, _) in &self.edges { uf.union(a, b); }
-        (0..self.n).map(|i| uf.component_size(i)).max().unwrap_or(0) as f64 / self.n as f64 > 0.5
+/// Check if the grid percolates top-to-bottom for the given target value.
+/// Uses flood fill from the top row.
+pub fn percolates(grid: &[i8], width: usize, target_value: i8) -> bool {
+    if grid.is_empty() || width == 0 {
+        return false;
     }
-    pub fn critical_density(&self) -> f64 { if self.n <= 1 { 0.0 } else { self.edges.len() as f64 / (self.n * (self.n - 1) / 2) as f64 } }
-    pub fn largest_cluster(&self) -> usize {
-        let mut uf = UnionFind::new(self.n);
-        for &(a, b, _) in &self.edges { uf.union(a, b); }
-        (0..self.n).map(|i| uf.component_size(i)).max().unwrap_or(0)
+    let height = grid.len() / width;
+    if height == 0 {
+        return false;
     }
-    pub fn count_components(&self) -> usize {
-        let mut uf = UnionFind::new(self.n);
-        for &(a, b, _) in &self.edges { uf.union(a, b); }
-        (0..self.n).map(|i| uf.find(i)).collect::<std::collections::HashSet<usize>>().len()
+
+    let mut visited = vec![false; grid.len()];
+    let mut stack = Vec::new();
+
+    // Seed from top row
+    for col in 0..width {
+        if grid[col] == target_value {
+            visited[col] = true;
+            stack.push(col);
+        }
     }
-    pub fn signed_clusters(&self) -> (usize, usize) {
-        let mut uf = UnionFind::new(self.n);
-        for &(a, b, _) in &self.edges { uf.union(a, b); }
-        let roots: Vec<usize> = (0..self.n).map(|i| uf.find(i)).collect();
-        let unique: std::collections::HashSet<usize> = roots.iter().copied().collect();
-        let signs = &self.signs;
-        let pos = unique.iter().filter(|&&r| signs[r] > 0).count();
-        (pos, unique.len() - pos)
+
+    while let Some(idx) = stack.pop() {
+        let row = idx / width;
+        let col = idx % width;
+
+        // Reached bottom
+        if row == height - 1 {
+            return true;
+        }
+
+        // Check 4 neighbors
+        let neighbors = [
+            if row > 0 { Some(idx - width) } else { None },
+            if row + 1 < height { Some(idx + width) } else { None },
+            if col > 0 { Some(idx - 1) } else { None },
+            if col + 1 < width { Some(idx + 1) } else { None },
+        ];
+
+        for n in neighbors.iter().flatten() {
+            if !visited[*n] && grid[*n] == target_value {
+                visited[*n] = true;
+                stack.push(*n);
+            }
+        }
     }
+
+    false
+}
+
+/// Count the number of distinct clusters of target_value using flood fill.
+pub fn cluster_count(grid: &[i8], width: usize, target_value: i8) -> usize {
+    if grid.is_empty() || width == 0 {
+        return 0;
+    }
+    let height = grid.len() / width;
+    let mut visited = vec![false; grid.len()];
+    let mut count = 0;
+
+    for start in 0..grid.len() {
+        if visited[start] || grid[start] != target_value {
+            continue;
+        }
+        count += 1;
+        let mut stack = vec![start];
+        visited[start] = true;
+        while let Some(idx) = stack.pop() {
+            let row = idx / width;
+            let col = idx % width;
+            let neighbors = [
+                if row > 0 { Some(idx - width) } else { None },
+                if row + 1 < height { Some(idx + width) } else { None },
+                if col > 0 { Some(idx - 1) } else { None },
+                if col + 1 < width { Some(idx + 1) } else { None },
+            ];
+            for n in neighbors.iter().flatten() {
+                if !visited[*n] && grid[*n] == target_value {
+                    visited[*n] = true;
+                    stack.push(*n);
+                }
+            }
+        }
+    }
+
+    count
+}
+
+/// Size of the largest cluster of target_value.
+pub fn largest_cluster(grid: &[i8], width: usize, target_value: i8) -> usize {
+    if grid.is_empty() || width == 0 {
+        return 0;
+    }
+    let height = grid.len() / width;
+    let mut visited = vec![false; grid.len()];
+    let mut max_size = 0;
+
+    for start in 0..grid.len() {
+        if visited[start] || grid[start] != target_value {
+            continue;
+        }
+        let mut size = 0;
+        let mut stack = vec![start];
+        visited[start] = true;
+        while let Some(idx) = stack.pop() {
+            size += 1;
+            let row = idx / width;
+            let col = idx % width;
+            let neighbors = [
+                if row > 0 { Some(idx - width) } else { None },
+                if row + 1 < height { Some(idx + width) } else { None },
+                if col > 0 { Some(idx - 1) } else { None },
+                if col + 1 < width { Some(idx + 1) } else { None },
+            ];
+            for n in neighbors.iter().flatten() {
+                if !visited[*n] && grid[*n] == target_value {
+                    visited[*n] = true;
+                    stack.push(*n);
+                }
+            }
+        }
+        if size > max_size {
+            max_size = size;
+        }
+    }
+
+    max_size
+}
+
+/// Estimate the critical density via binary search over percolation probability.
+pub fn critical_density(width: usize, height: usize, samples: usize, rng: &mut impl FnMut() -> f64) -> f64 {
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+
+    for _ in 0..15 {
+        let mid = (lo + hi) / 2.0;
+        let mut percolation_count = 0;
+        for _ in 0..samples {
+            let grid = fill_grid(width, height, mid, rng);
+            if percolates(&grid, width, 1) {
+                percolation_count += 1;
+            }
+        }
+        let prob = percolation_count as f64 / samples as f64;
+        if prob < 0.5 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    (lo + hi) / 2.0
+}
+
+/// Fraction of cells belonging to the percolating cluster (or largest if no percolation).
+pub fn percolation_strength(grid: &[i8], width: usize, target_value: i8) -> f64 {
+    if grid.is_empty() {
+        return 0.0;
+    }
+    let largest = largest_cluster(grid, width, target_value);
+    largest as f64 / grid.len() as f64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn test_uf_basic() { let mut uf = UnionFind::new(5); uf.union(0,1); uf.union(1,2); assert_eq!(uf.find(0), uf.find(2)); }
-    #[test] fn test_uf_separate() { let mut uf = UnionFind::new(5); assert_ne!(uf.find(0), uf.find(3)); }
-    #[test] fn test_uf_size() { let mut uf = UnionFind::new(5); uf.union(0,1); uf.union(0,2); assert_eq!(uf.component_size(0), 3); }
-    #[test] fn test_creation() { let lat = TernaryLattice::new(10); assert_eq!(lat.edges.len(), 0); }
-    #[test] fn test_add_edge() { let mut lat = TernaryLattice::new(5); lat.add_edge(0, 1, 1); assert_eq!(lat.edges.len(), 1); }
-    #[test] fn test_no_percolation() { let lat = TernaryLattice::new(10); assert!(!lat.percolates()); }
-    #[test] fn test_full_percolation() { let mut lat = TernaryLattice::new(4); for i in 0..4 { for j in i+1..4 { lat.add_edge(i,j,1); } } assert!(lat.percolates()); }
-    #[test] fn test_density() { let mut lat = TernaryLattice::new(4); lat.add_edge(0,1,1); assert!(lat.critical_density() > 0.0); }
-    #[test] fn test_largest() { let mut lat = TernaryLattice::new(5); lat.add_edge(0,1,1); lat.add_edge(1,2,1); assert_eq!(lat.largest_cluster(), 3); }
-    #[test] fn test_signed() { let mut lat = TernaryLattice::new(4); lat.add_edge(0,1,1); lat.signs[0]=1; let (p,n)=lat.signed_clusters(); assert!(p>=0&&n>=0); }
-    #[test] fn test_empty() { let lat = TernaryLattice::new(0); assert_eq!(lat.n, 0); }
-    #[test] fn test_single() { let lat = TernaryLattice::new(1); assert_eq!(lat.count_components(), 1); }
-    #[test] fn test_components_separate() { let lat = TernaryLattice::new(5); assert_eq!(lat.count_components(), 5); }
-    #[test] fn test_components_joined() { let mut lat = TernaryLattice::new(5); lat.add_edge(0,1,1); assert_eq!(lat.count_components(), 4); }
-    #[test] fn test_chain() { let mut lat = TernaryLattice::new(100); for i in 0..99 { lat.add_edge(i,i+1,1); } assert!(lat.percolates()); }
-    #[test] fn test_ring() { let mut lat = TernaryLattice::new(10); for i in 0..10 { lat.add_edge(i,(i+1)%10,1); } assert!(lat.percolates()); }
-    #[test] fn test_disconnected() { let mut lat = TernaryLattice::new(10); lat.add_edge(0,1,1); lat.add_edge(2,3,1); assert_eq!(lat.largest_cluster(), 2); }
-    #[test] fn test_density_zero() { let lat = TernaryLattice::new(5); assert_eq!(lat.critical_density(), 0.0); }
+
+    fn deterministic_rng(seed: u64) -> impl FnMut() -> f64 {
+        let mut s = seed;
+        move || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (s >> 33) as f64 / (1u64 << 31) as f64
+        }
+    }
+
+    #[test]
+    fn test_fill_grid_size() {
+        let mut rng = deterministic_rng(42);
+        let grid = fill_grid(5, 3, 0.5, &mut rng);
+        assert_eq!(grid.len(), 15);
+    }
+
+    #[test]
+    fn test_fill_grid_values() {
+        let mut rng = deterministic_rng(42);
+        let grid = fill_grid(5, 3, 1.0, &mut rng);
+        for &v in &grid {
+            assert!(v == -1 || v == 0 || v == 1);
+        }
+    }
+
+    #[test]
+    fn test_fill_grid_zero_density() {
+        let mut rng = deterministic_rng(42);
+        let grid = fill_grid(4, 4, 0.0, &mut rng);
+        assert!(grid.iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn test_percolates_simple_yes() {
+        // 3x3 grid, all 1s — should percolate
+        let grid = vec![1i8; 9];
+        assert!(percolates(&grid, 3, 1));
+    }
+
+    #[test]
+    fn test_percolates_simple_no() {
+        // 3x3 grid with middle row blocked
+        let grid = vec![1, 1, 1, 0, 0, 0, 1, 1, 1i8];
+        assert!(!percolates(&grid, 3, 1));
+    }
+
+    #[test]
+    fn test_percolates_empty() {
+        assert!(!percolates(&[], 0, 1));
+    }
+
+    #[test]
+    fn test_cluster_count_single() {
+        let grid = vec![1i8; 4]; // 2x2 all 1s
+        assert_eq!(cluster_count(&grid, 2, 1), 1);
+    }
+
+    #[test]
+    fn test_cluster_count_none() {
+        let grid = vec![0i8; 4];
+        assert_eq!(cluster_count(&grid, 2, 1), 0);
+    }
+
+    #[test]
+    fn test_cluster_count_multiple() {
+        // 1 0 1
+        // 0 0 0
+        // 1 0 1
+        let grid = vec![1, 0, 1, 0, 0, 0, 1, 0, 1i8];
+        assert_eq!(cluster_count(&grid, 3, 1), 4);
+    }
+
+    #[test]
+    fn test_largest_cluster_all() {
+        let grid = vec![1i8; 9];
+        assert_eq!(largest_cluster(&grid, 3, 1), 9);
+    }
+
+    #[test]
+    fn test_largest_cluster_empty() {
+        assert_eq!(largest_cluster(&[], 0, 1), 0);
+    }
+
+    #[test]
+    fn test_percolation_strength_all() {
+        let grid = vec![1i8; 9];
+        let s = percolation_strength(&grid, 3, 1);
+        assert!((s - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_percolation_strength_partial() {
+        // 2x2 grid, only top-left is 1
+        let grid = vec![1, 0, 0, 0i8];
+        let s = percolation_strength(&grid, 2, 1);
+        assert!((s - 0.25).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_critical_density_range() {
+        let mut rng = deterministic_rng(42);
+        let cd = critical_density(5, 5, 20, &mut rng);
+        assert!(cd >= 0.0 && cd <= 1.0);
+    }
+
+    #[test]
+    fn test_fill_grid_high_density() {
+        let mut rng = deterministic_rng(42);
+        let grid = fill_grid(10, 10, 0.99, &mut rng);
+        let non_zero = grid.iter().filter(|&&v| v != 0).count();
+        assert!(non_zero > 80); // Almost all should be non-zero
+    }
+
+    #[test]
+    fn test_percolates_negative() {
+        // Test with target -1
+        let grid = vec![-1i8; 9];
+        assert!(percolates(&grid, 3, -1));
+    }
 }

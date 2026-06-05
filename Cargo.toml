@@ -2,5 +2,7 @@
 name = "ternary-percolation"
 version = "0.1.0"
 edition = "2021"
-description = "Percolation threshold detection for ternary networks — union-find, signed edges, critical density"
-license = "MIT"
+
+[lib]
+
+[dev-dependencies]
