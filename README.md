@@ -1,73 +1,131 @@
 # ternary-percolation
 
-**Percolation theory on ternary grids. When does the path connect?**
+Percolation theory primitives for ternary {-1, 0, +1} lattices. Flood-fill cluster counting, spanning detection, critical density estimation via binary search, and percolation strength — all in pure Rust with zero dependencies.
 
-Percolation asks a simple question: if you randomly fill a grid with active cells, at what density does a connected path form from one side to the other? Below the critical threshold, you get isolated islands. Above it, a spanning cluster emerges. The transition is sharp — a genuine phase transition.
+## Why It Matters
 
-For ternary grids, the question gets richer: you can percolate *either* the +1 cells *or* the -1 cells (or treat 0 as the barrier). This crate implements flood-fill percolation detection, critical density estimation, and cluster analysis on ternary grids.
+Percolation describes the emergence of long-range connectivity in disordered media. For ternary systems, this means understanding when and how a population of {-1, 0, +1} agents forms a connected path across a spatial domain. The critical density — the tipping point where connectivity suddenly appears — is a phase transition with universal scaling properties.
 
-## What's Inside
+This crate provides:
+- **Flood-fill clustering**: identify all connected regions of a given ternary state
+- **Spanning detection**: does any connected path cross the entire lattice?
+- **Critical density estimation**: binary search for the percolation threshold $p_c$
+- **Percolation strength**: fraction of the system in the largest cluster
 
-- **`fill_grid(width, height, density, rng)`** — generate a random ternary grid with given density
-- **`percolates(grid, width, target_value)`** — does the target value connect top to bottom? Flood-fill from top row
-- **`find_critical_density(width, height, target_value, rng, steps)`** — binary search for the percolation threshold
-- **`largest_cluster(grid, width, target_value)`** — size of the largest connected component
-- **`cluster_sizes(grid, width, target_value)`** — all cluster sizes (sorted descending)
-- **`percolation_probability(width, height, density, target_value, trials, rng)`** — fraction of random grids that percolate at given density
+Applications include agent network formation, ternary sensor field analysis, opinion dynamics on spatial grids, and studying phase transitions in three-state Potts-like models.
 
-## Quick Example
+## How It Works
+
+### Grid Model
+
+Grids are stored row-major: $\text{index} = y \times W + x$. Each cell holds a value $v \in \{-1, 0, +1\}$.
+
+### Random Filling
+
+Fill with density $p$:
+
+$$v_i = \begin{cases} +1 & \text{if } r_i < p \text{ and } u_i < 0.5 \\ -1 & \text{if } r_i < p \text{ and } u_i \geq 0.5 \\ 0 & \text{otherwise} \end{cases}$$
+
+where $r_i, u_i$ are uniform random variates. The expected number of non-zero cells is $p \times W \times H$.
+
+### Spanning Detection (DFS Flood Fill)
+
+Starting from each cell with value $v$ on the top row, perform depth-first search through 4-connected neighbors of matching value. If the search reaches the bottom row, the grid percolates for state $v$.
+
+**Complexity:** O($N$) where $N = W \times H$ — each cell visited once.
+
+### Cluster Counting
+
+Enumerate all connected components using iterative DFS:
+
+1. Scan for unvisited cell with target value
+2. Flood fill to mark entire component
+3. Record component and increment count
+4. Repeat
+
+**Complexity:** O($N$).
+
+### Largest Cluster
+
+Same as cluster counting, but track the maximum component size encountered.
+
+### Critical Density
+
+Binary search over $p \in [0, 1]$:
+
+1. For midpoint $p_{\text{mid}}$, generate `samples` random grids
+2. Count fraction that percolate
+3. If fraction < 0.5: search upper half ($p_c > p_{\text{mid}}$)
+4. If fraction ≥ 0.5: search lower half
+
+**Complexity:** O($N \cdot \text{samples} \cdot \log_2(1/\epsilon)$) for precision $\epsilon$.
+
+**Known result:** for 2D square lattice site percolation, $p_c \approx 0.5928$.
+
+### Percolation Strength
+
+$$P_\infty = \frac{S_{\max}}{N}$$
+
+where $S_{\max}$ is the largest cluster size and $N$ is the total number of cells.
+
+Near $p_c$, $P_\infty \sim (p - p_c)^\beta$ with $\beta = 5/36$ in 2D (universality class of the Potts model with $q = 1$, i.e., percolation).
+
+## Quick Start
 
 ```rust
 use ternary_percolation::*;
 
-let mut rng = || 0.42; // your RNG
+// Deterministic RNG for reproducibility
+let mut s: u64 = 42;
+let mut rng = || {
+    s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+    (s >> 33) as f64 / (1u64 << 31) as f64
+};
 
-// Random grid with 40% density
-let grid = fill_grid(20, 20, 0.4, &mut rng);
+// Fill a random grid
+let grid = fill_grid(20, 20, 0.5, &mut rng);
+assert_eq!(grid.len(), 400);
 
-// Does +1 percolate top to bottom?
-if percolates(&grid, 20, 1) {
-    println!("+1 cells form a spanning cluster!");
-}
+// Check percolation for +1
+let percs = percolates(&grid, 20, 1);
 
-// Find the critical density
-let critical = find_critical_density(20, 20, 1, &mut rng, 20);
-println!("Critical density: {:.3}", critical);
-// Expected: ~0.59 for site percolation on square lattice
+// Count clusters
+let nc = cluster_count(&grid, 20, 1);
 
-// Cluster analysis
-let sizes = cluster_sizes(&grid, 20, 1);
-println!("Largest cluster: {} cells", sizes[0]);
+// Largest cluster
+let largest = largest_cluster(&grid, 20, 1);
+
+// Percolation strength
+let strength = percolation_strength(&grid, 20, 1);
+
+// Critical density estimation
+let pc = critical_density(10, 10, 30, &mut rng);
+println!("Critical density ≈ {:.3}", pc);
 ```
 
-## The Deeper Truth
+## API
 
-**Percolation is the bridge between local and global.** No individual cell "knows" about the spanning cluster. Each cell is independently active or not. But above the critical density, a macroscopic connected structure *emerges* from purely local decisions. This is the same mechanism behind epidemic spreading, network connectivity, and material porosity.
+| Function | Description |
+|---|---|
+| `fill_grid(w, h, density, rng) → Vec<i8>` | Random ternary grid |
+| `percolates(grid, w, target) → bool` | DFS spanning check top→bottom |
+| `cluster_count(grid, w, target) → usize` | Number of connected components |
+| `largest_cluster(grid, w, target) → usize` | Size of biggest component |
+| `percolation_strength(grid, w, target) → f64` | $S_{\max} / N$ |
+| `critical_density(w, h, samples, rng) → f64` | Binary search for $p_c$ |
 
-For ternary systems, percolation has a unique wrinkle: you can ask whether +1 percolates, whether -1 percolates, or whether they *both* percolate simultaneously. At moderate densities, they can't both percolate — there isn't enough space. This creates a competition between +1 and -1 clusters, with 0 cells as the contested territory.
+## Architecture Notes
 
-The critical density for ternary site percolation on a square lattice is ~12% — lower than binary percolation (~59%) because ternary grids have three competing phases, so each phase needs fewer cells to span.
+The ternary percolation model maps directly onto the **γ + η = C** conservation identity. The +1 sites represent constructive mass γ, the -1 sites represent inhibitory mass η, and the 0 sites are neutral. The percolation of +1 or -1 clusters corresponds to the formation of long-range order in the γ or η population — a spatial phase transition.
 
-**Use cases:**
-- **Network resilience** — at what failure rate does the network disconnect?
-- **Epidemic modeling** — what infection rate causes pandemic spread?
-- **Material science** — porosity and conductivity thresholds
-- **Image segmentation** — connected component extraction
-- **Infrastructure planning** — connectivity requirements for distributed systems
+Because the total site count is conserved ($C = W \times H$), increasing γ percolation necessarily means decreasing the available sites for η percolation. The competition between γ-clusters and η-clusters near the percolation threshold creates rich critical phenomena analogous to the $q = 3$ Potts model, where the universal exponents differ from simple ($q = 1$) percolation: $\beta = 1/9$ for the 3-state Potts universality class.
 
-## See Also
+## References
 
-- **ternary-fire** — fire spreading is percolation with dynamics
-- **ternary-minority** — the anti-percolation force (prevents spanning clusters)
-- **ternary-morph** — morphological reconstruction (related to connected components)
-- **ternary-field** — gradient analysis of percolation clusters
-- **ternary-drift** — how percolation changes under drift dynamics
-
-## Install
-
-```bash
-cargo add ternary-percolation
-```
+- Stauffer, D. & Aharony, A. (2018). *Introduction to Percolation Theory.* 2nd ed. CRC Press.
+- Wu, F. Y. (1982). *The Potts Model.* Reviews of Modern Physics, 54(1). (q-state universality)
+- Isichenko, M. B. (1992). *Percolation, statistical topography, and transport in random media.* Rev. Mod. Phys., 64(4).
+- Newman, M. E. J. & Ziff, R. M. (2000). *Efficient Monte Carlo Algorithm and High-Precision Results for Percolation.* Phys. Rev. Lett., 85.
 
 ## License
 
